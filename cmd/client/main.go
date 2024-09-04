@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/zimmah/learn-pub-sub-starter/internal/gamelogic"
@@ -58,6 +59,11 @@ func main() {
 		log.Fatalf("couldn't declare or bind channel: %v", err)
 	}
 
+	warChan, _, err := pubsub.DeclareAndBind(conn, routing.ExchangePerilTopic, routing.WarRecognitionsPrefix, routing.WarRecognitionsPrefix+".*", pubsub.Durable)
+	if err != nil {
+		log.Fatalf("couldn't declare or bind channel: %v", err)
+	}
+
 	err = pubsub.SubscribeJSON(
 		conn,
 		routing.ExchangePerilTopic,
@@ -76,7 +82,7 @@ func main() {
 		routing.WarRecognitionsPrefix,
 		routing.WarRecognitionsPrefix+".*",
 		pubsub.Durable,
-		handlerWar(gamestate),
+		handlerWar(gamestate, warChan),
 	)
 	if err != nil {
 		log.Fatalf("could not subscribe to war declarations: %v", err)
@@ -160,7 +166,7 @@ func HandlerMove(gs *gamelogic.GameState, channel *amqp.Channel) func(gamelogic.
 	}
 }
 
-func handlerWar(gs *gamelogic.GameState) func(dw gamelogic.RecognitionOfWar) pubsub.AckType {
+func handlerWar(gs *gamelogic.GameState, channel *amqp.Channel) func(dw gamelogic.RecognitionOfWar) pubsub.AckType {
 	return func(dw gamelogic.RecognitionOfWar) pubsub.AckType {
 		defer fmt.Print("> ")
 		warOutcome, _, _ := gs.HandleWar(dw)
@@ -170,10 +176,49 @@ func handlerWar(gs *gamelogic.GameState) func(dw gamelogic.RecognitionOfWar) pub
 		case gamelogic.WarOutcomeNoUnits:
 			return pubsub.NackDiscard
 		case gamelogic.WarOutcomeOpponentWon:
+			err := pubsub.PublishGob(
+				channel,
+				routing.ExchangePerilTopic,
+				routing.GameLogSlug+"."+dw.Attacker.Username,
+				routing.GameLog{
+					CurrentTime: time.Now(),
+					Message:     fmt.Sprintf("%v won a war against %v", dw.Defender, dw.Attacker),
+					Username:    dw.Attacker.Username},
+			)
+			if err != nil {
+				fmt.Printf("Error publishing Gob: %v", err)
+				return pubsub.NackRequeue
+			}
 			return pubsub.Ack
 		case gamelogic.WarOutcomeYouWon:
+			err := pubsub.PublishGob(
+				channel,
+				routing.ExchangePerilTopic,
+				routing.GameLogSlug+"."+dw.Attacker.Username,
+				routing.GameLog{
+					CurrentTime: time.Now(),
+					Message:     fmt.Sprintf("%v won a war against %v", dw.Attacker, dw.Defender),
+					Username:    dw.Attacker.Username},
+			)
+			if err != nil {
+				fmt.Printf("Error publishing Gob: %v", err)
+				return pubsub.NackRequeue
+			}
 			return pubsub.Ack
 		case gamelogic.WarOutcomeDraw:
+			err := pubsub.PublishGob(
+				channel,
+				routing.ExchangePerilTopic,
+				routing.GameLogSlug+"."+dw.Attacker.Username,
+				routing.GameLog{
+					CurrentTime: time.Now(),
+					Message:     fmt.Sprintf("A war between %v and %v resulted in a draw", dw.Attacker, dw.Defender),
+					Username:    dw.Attacker.Username},
+			)
+			if err != nil {
+				fmt.Printf("Error publishing Gob: %v", err)
+				return pubsub.NackRequeue
+			}
 			return pubsub.Ack
 		}
 
