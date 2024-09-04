@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -21,6 +22,11 @@ func main() {
 	}
 	defer conn.Close()
 	fmt.Println("Peril game client connected to RabbitMQ!")
+
+	publishCh, err := conn.Channel()
+	if err != nil {
+		log.Fatal("couldn't create channel")
+	}
 
 	username, err := gamelogic.ClientWelcome()
 	if err != nil {
@@ -121,7 +127,21 @@ func main() {
 		case "help":
 			gamelogic.PrintClientHelp()
 		case "spam":
-			fmt.Println("Spamming not allowed yet!")
+			if words[1] == "" {
+				return
+			}
+			n, err := strconv.Atoi(words[1])
+			if err != nil {
+				return
+			}
+			for i := 0; i < n; i++ {
+				msg := gamelogic.GetMaliciousLog()
+				err = publishGameLog(publishCh, username, msg)
+				if err != nil {
+					fmt.Printf("error publishing malicious log: %s\n", err)
+				}
+			}
+			fmt.Printf("Published %v malicious logs\n", n)
 		case "quit":
 			gamelogic.PrintQuit()
 			return
@@ -129,6 +149,19 @@ func main() {
 			fmt.Println("unknown command")
 		}
 	}
+}
+
+func publishGameLog(publishCh *amqp.Channel, username, msg string) error {
+	return pubsub.PublishGob(
+		publishCh,
+		routing.ExchangePerilTopic,
+		routing.GameLogSlug+"."+username,
+		routing.GameLog{
+			Username:    username,
+			CurrentTime: time.Now(),
+			Message:     msg,
+		},
+	)
 }
 
 func HandlerPause(gs *gamelogic.GameState) func(routing.PlayingState) pubsub.AckType {

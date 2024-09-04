@@ -98,8 +98,8 @@ func SubscribeJSON[T any](
 	exchange,
 	queueName,
 	key string,
-	simpleQueueType SimpleQueueType,
-	handler func(T) Acktype,
+	simpleQueueType simpleQueueType,
+	handler func(T) AckType,
 ) error {
 	return subscribe[T](
 		conn,
@@ -121,8 +121,8 @@ func SubscribeGob[T any](
 	exchange,
 	queueName,
 	key string,
-	simpleQueueType SimpleQueueType,
-	handler func(T) Acktype,
+	simpleQueueType simpleQueueType,
+	handler func(T) AckType,
 ) error {
 	return subscribe[T](
 		conn,
@@ -146,15 +146,15 @@ func subscribe[T any](
 	exchange,
 	queueName,
 	key string,
-	simpleQueueType SimpleQueueType,
-	handler func(T) Acktype,
+	simpleQueueType simpleQueueType,
+	handler func(T) AckType,
 	unmarshaller func([]byte) (T, error),
 ) error {
 	ch, queue, err := DeclareAndBind(conn, exchange, queueName, key, simpleQueueType)
 	if err != nil {
 		return fmt.Errorf("could not declare and bind queue: %v", err)
 	}
-
+	ch.Qos(10, 0, true)
 	msgs, err := ch.Consume(
 		queue.Name, // queue
 		"",         // consumer
@@ -166,3 +166,25 @@ func subscribe[T any](
 	)
 	if err != nil {
 		return fmt.Errorf("could not consume messages: %v", err)
+	}
+
+	go func() {
+		defer ch.Close()
+		for msg := range msgs {
+			target, err := unmarshaller(msg.Body)
+			if err != nil {
+				fmt.Printf("could not unmarshal message: %v\n", err)
+				continue
+			}
+			switch handler(target) {
+			case Ack:
+				msg.Ack(false)
+			case NackDiscard:
+				msg.Nack(false, false)
+			case NackRequeue:
+				msg.Nack(false, true)
+			}
+		}
+	}()
+	return nil
+}
